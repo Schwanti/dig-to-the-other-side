@@ -8,6 +8,9 @@ const HudScript := preload("res://scripts/hud.gd")
 const WorkbenchScript := preload("res://scripts/workbench_ui.gd")
 
 const BENCH_POS := Vector3(4.6, 0.0, 2.6)
+const CONTAINER_POS := Vector3(-3.8, 0.0, 2.2)
+const BOARD_POS := Vector3(3.6, 0.0, -2.8)
+const SHIRTS := ["#3c8dde", "#e0533d", "#46b06a", "#f2b632", "#a05cc9", "#e07ab0"]
 const COOLDOWN := [0.24, 0.26, 0.32, 0.1]   # Pause zwischen zwei Schlägen je Werkzeug
 
 # Ohne festen Typ, damit die eigenen Eigenschaften der Skripte (state, cam, refresh …) erreichbar sind
@@ -41,6 +44,12 @@ var gold_timer := 45.0
 var finds: Array = []
 var reveal_queue: Array = []
 var revealing := false
+# Helfer und Garten
+var kids: Node3D
+var mole_acc := 0.0
+var pile: MeshInstance3D
+var board_label: Label3D
+var quest_timer := 0.0
 
 
 func _ready() -> void:
@@ -62,6 +71,10 @@ func _ready() -> void:
 	player.descend_started.connect(_on_descend)
 	bench_ui.closed.connect(func(): player.input_enabled = true)
 	_build_gold_disc()
+	_build_container_and_board()
+	kids = Node3D.new()
+	add_child(kids)
+	player.obstacles = [[BENCH_POS, 1.2], [CONTAINER_POS, 1.5], [BOARD_POS, 0.6]]
 
 	if Game.load_game() and Game.depth > 0.05:
 		player.place_on_surface()
@@ -86,6 +99,12 @@ func _process(delta: float) -> void:
 	_update_finds()
 	if not Game.sonar.is_empty() and Game.depth >= float(Game.sonar["d"]):
 		_sonar_reached()
+	_update_helpers(delta)
+	quest_timer += delta
+	if quest_timer > 0.5:
+		quest_timer = 0.0
+		Game.check_quests()
+		_update_board()
 	if clock - last_hit > 0.8:
 		combo = 0
 		combo_level = 0
@@ -105,6 +124,7 @@ func _process(delta: float) -> void:
 	hud.refresh(zone, p[0], p[1], {
 		"combo": combo, "combo_mult": _combo_mult(), "boosts": " · ".join(boosts),
 		"sonar": sonar_text, "aim_find": _aimed_find() >= 0, "bag": Game.bag.size(),
+		"quests": Game.quest_lines(), "helpers": Game.helper_rate(),
 	})
 
 	save_timer += delta
@@ -147,6 +167,7 @@ func _on_dig() -> void:
 		combo = 0
 	last_hit = clock
 	var mult := _combo_mult()
+	Game.best_mult = maxf(Game.best_mult, mult)
 	var level := 3 if mult >= 2.5 else (2 if mult >= 2.0 else (1 if mult >= 1.5 else 0))
 	if level > combo_level:
 		hud.show_takt_level(mult)
@@ -310,6 +331,170 @@ func _sonar_reached() -> void:
 	var at := _scatter(_aim_point()) if player.state == "bottom" else Vector3(randf_range(-0.8, 0.8), 0, randf_range(-0.8, 0.8))
 	_spawn_find(at, F)
 	Game.toast.emit("Echolot-Ziel erreicht: %s! Der Klumpen liegt in der Sohle." % k["name"], "big")
+
+
+# ---------- Helfer ----------
+## Helfer graben laufend und bringen ihren Aushub selbst hoch: das Geld kommt sofort.
+func _update_helpers(delta: float) -> void:
+	var rate := Game.helper_rate()
+	if rate > 0.0:
+		var r := Game.dig(rate * delta)
+		Game.eur += r["val"]
+		Game.total_eur += r["val"]
+	# Nachbarskinder graben sichtbar neben dir (höchstens sechs)
+	var want := mini(6, int(Game.n["kid"]))
+	while kids.get_child_count() < want:
+		kids.add_child(_make_kid(kids.get_child_count()))
+	kids.position.y = -Game.depth
+	for child in kids.get_children():
+		var kid := child as Node3D
+		var ph: float = float(kid.get_meta("phase")) + delta * 5.0
+		kid.set_meta("phase", ph)
+		var arm: Node3D = kid.get_meta("arm")
+		arm.rotation.x = sin(ph) * 0.6 - 0.2
+		kid.position.y = absf(sin(ph)) * 0.03
+	# Maulwürfe werfen ab und zu Erde auf
+	if Game.n["mole"] > 0:
+		mole_acc += delta * minf(3.0, Game.n["mole"] * 0.4)
+		if mole_acc > 1.0:
+			mole_acc = 0.0
+			var a := 0.6 + randf() * 5.0
+			dirt.global_position = Vector3(cos(a) * (Game.R - 0.3), -Game.depth, sin(a) * (Game.R - 0.3))
+			dirt.color = Game.current_layer()["base"]
+			dirt.restart()
+
+
+func _make_kid(i: int) -> Node3D:
+	var g := Node3D.new()
+	var shirt := Color(SHIRTS[i % SHIRTS.size()])
+	var parts := [
+		[_mesh_box(Vector3(0.22, 0.5, 0.18)), Color("#2f3b55"), Vector3(0, 0.25, 0)],
+		[_mesh_cyl(0.15, 0.13, 0.45), shirt, Vector3(0, 0.72, 0)],
+		[_mesh_sphere(0.13, false), Color("#f0c9a0"), Vector3(0, 1.08, 0)],
+		[_mesh_sphere(0.135, true), Color(SHIRTS[(i + 2) % SHIRTS.size()]), Vector3(0, 1.1, 0)],
+	]
+	for p in parts:
+		var mi := MeshInstance3D.new()
+		mi.mesh = p[0]
+		mi.material_override = _mat(p[1])
+		mi.position = p[2]
+		g.add_child(mi)
+	var arm := Node3D.new()
+	arm.position = Vector3(0, 0.85, 0.12)
+	g.add_child(arm)
+	var stick := MeshInstance3D.new()
+	stick.mesh = _mesh_cyl(0.015, 0.015, 0.5)
+	stick.material_override = _mat(Color("#a0763f"))
+	stick.position = Vector3(0, -0.15, 0.12)
+	stick.rotation.x = 0.9
+	arm.add_child(stick)
+	var blade := MeshInstance3D.new()
+	blade.mesh = _mesh_box(Vector3(0.1, 0.01, 0.12))
+	blade.material_override = _mat(Color("#9aa0a6"), 0.4)
+	blade.position = Vector3(0, -0.32, 0.32)
+	blade.rotation.x = 0.9
+	arm.add_child(blade)
+	g.set_meta("arm", arm)
+	g.set_meta("phase", randf() * 6.0)
+	# Rund um die Wand verteilt, die Leiterseite bleibt frei, Blick zur Mitte
+	var a := 0.7 + (float(i) / 6.0) * (TAU - 1.4)
+	var x := cos(a) * (Game.R - 0.38)
+	var z := sin(a) * (Game.R - 0.38)
+	g.position = Vector3(x, 0, z)
+	g.rotation.y = atan2(-x, -z)
+	return g
+
+
+func _mesh_box(size: Vector3) -> BoxMesh:
+	var m := BoxMesh.new()
+	m.size = size
+	return m
+
+
+func _mesh_cyl(top: float, bottom: float, h: float) -> CylinderMesh:
+	var m := CylinderMesh.new()
+	m.top_radius = top
+	m.bottom_radius = bottom
+	m.height = h
+	m.radial_segments = 12
+	return m
+
+
+func _mesh_sphere(radius: float, half: bool) -> SphereMesh:
+	var m := SphereMesh.new()
+	m.radius = radius
+	m.height = radius * (1.0 if half else 2.0)
+	m.is_hemisphere = half
+	m.radial_segments = 14
+	m.rings = 8
+	return m
+
+
+# ---------- Container und Auftragstafel ----------
+func _build_container_and_board() -> void:
+	var cont := Node3D.new()
+	cont.position = CONTAINER_POS
+	cont.rotation.y = 0.5
+	add_child(cont)
+	var yel := Color("#e0a21c")
+	for part in [
+		[Vector3(2.4, 0.08, 1.4), Vector3(0, 0.1, 0)],
+		[Vector3(2.4, 1.0, 0.08), Vector3(0, 0.55, 0.7)],
+		[Vector3(2.4, 1.0, 0.08), Vector3(0, 0.55, -0.7)],
+		[Vector3(0.08, 1.0, 1.4), Vector3(1.2, 0.55, 0)],
+		[Vector3(0.08, 1.0, 1.4), Vector3(-1.2, 0.55, 0)],
+	]:
+		var mi := MeshInstance3D.new()
+		mi.mesh = _mesh_box(part[0])
+		mi.material_override = _mat(yel, 0.6)
+		mi.position = part[1]
+		cont.add_child(mi)
+	# Der Aushubhaufen wächst mit jedem verkauften Kilo
+	pile = MeshInstance3D.new()
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.0
+	cone.bottom_radius = 1.0
+	cone.height = 1.0
+	pile.mesh = cone
+	pile.material_override = _mat(Color("#6e4c31"))
+	cont.add_child(pile)
+	_sign("CONTAINER", CONTAINER_POS + Vector3(0, 1.7, 0), Color("#e0a21c"))
+
+	# Auftragstafel, zum Loch gedreht
+	var board := Node3D.new()
+	board.position = BOARD_POS
+	board.rotation.y = atan2(-BOARD_POS.x, -BOARD_POS.z)
+	add_child(board)
+	for part in [
+		[Vector3(0.08, 1.9, 0.08), Color("#5e3f22"), Vector3(-0.8, 0.95, 0)],
+		[Vector3(0.08, 1.9, 0.08), Color("#5e3f22"), Vector3(0.8, 0.95, 0)],
+		[Vector3(1.7, 1.1, 0.04), Color("#2c3a2a"), Vector3(0, 1.35, 0)],
+	]:
+		var mi := MeshInstance3D.new()
+		mi.mesh = _mesh_box(part[0])
+		mi.material_override = _mat(part[1])
+		mi.position = part[2]
+		board.add_child(mi)
+	board_label = Label3D.new()
+	board_label.font_size = 40
+	board_label.pixel_size = 0.0035
+	board_label.width = 440.0
+	board_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	board_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	board_label.modulate = Color("#f0ead8")
+	board_label.position = Vector3(0, 1.35, 0.03)
+	board.add_child(board_label)
+	_update_board()
+
+
+func _update_board() -> void:
+	var s: float = 0.15 + minf(1.2, log(1.0 + Game.sold_kg) / log(10.0) / 3.0)
+	pile.scale = Vector3(minf(1.1, s), s * 0.9, minf(0.62, s * 0.6))
+	pile.position.y = 0.14 + s * 0.45
+	var lines := PackedStringArray(["AUFTRÄGE"])
+	for l in Game.quest_lines():
+		lines.append("□ " + l)
+	board_label.text = "\n".join(lines)
 
 
 ## Oben werden die Klumpen einzeln aufgeklopft: erst Klopfen und Spannung, dann der Inhalt.

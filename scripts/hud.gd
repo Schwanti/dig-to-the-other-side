@@ -25,6 +25,8 @@ var reveal_k: Label
 var reveal_n: Label
 var reveal_v: Label
 var boost_l: Label
+var helper_l: Label
+var quest_l: Label
 var takt_l: Label
 var takt_bar: ProgressBar
 var prompt_l: Label
@@ -55,6 +57,24 @@ func _ready() -> void:
 	boost_l = _label(v, 13, C_CAUTION)
 	boost_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	boost_l.custom_minimum_size = Vector2(250, 0)
+	helper_l = _label(v, 13, C_MUTED)
+
+	# Aufträge unter der Hauptanzeige
+	var qpanel := PanelContainer.new()
+	qpanel.add_theme_stylebox_override("panel", _plate())
+	qpanel.position = Vector2(16, 0)
+	qpanel.name = "Quests"
+	add_child(qpanel)
+	var qv := VBoxContainer.new()
+	qv.custom_minimum_size = Vector2(250, 0)
+	qpanel.add_child(qv)
+	var qt := _label(qv, 12, C_MUTED)
+	qt.text = "AUFTRÄGE"
+	quest_l = _label(qv, 13, C_TEXT)
+	quest_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	quest_l.custom_minimum_size = Vector2(250, 0)
+	set_meta("main_panel", panel)
+	set_meta("quest_panel", qpanel)
 
 	# Takt unter dem Fadenkreuz
 	takt_l = Label.new()
@@ -194,6 +214,18 @@ func refresh(zone: String, prompt: String, urgent: bool, extra: Dictionary = {})
 	boost_l.visible = boost_l.text != ""
 	sonar_l.text = extra.get("sonar", "")
 	sonar_l.visible = sonar_l.text != ""
+	var rate: float = extra.get("helpers", 0.0)
+	helper_l.text = "Helfer graben %s/s" % Game.fmt_len(rate)
+	helper_l.visible = rate > 0.0
+	var ql: Array = extra.get("quests", [])
+	var qtext := ""
+	for q in ql:
+		qtext += "□ " + str(q) + "\n"
+	quest_l.text = qtext.strip_edges()
+	var main_panel: Control = get_meta("main_panel")
+	var quest_panel: Control = get_meta("quest_panel")
+	quest_panel.visible = not ql.is_empty()
+	quest_panel.position = Vector2(16, main_panel.position.y + main_panel.size.y + 8)
 	var bag_n: int = extra.get("bag", 0)
 	bag_l.text = "Rucksack: %d Klumpen" % bag_n
 	bag_l.visible = bag_n > 0

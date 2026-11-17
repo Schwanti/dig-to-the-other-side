@@ -65,7 +65,59 @@ var MODS: Array = [
 	{"id": "gold", "name": "Goldene Stunde", "desc": "Eine Goldader nach 10 Sekunden"},
 	{"id": "crit", "name": "Glückspilz", "desc": "Glückstreffer doppelt so oft"},
 	{"id": "finds", "name": "Fundreiche Schicht", "desc": "Doppelt so viele Klumpen"},
+	{"id": "mole", "name": "Maulwurf-Party", "desc": "Alle Helfer ×3"},
 ]
+
+# ---------- Helfer ----------
+# Sie graben selbstständig und bringen ihren Aushub selbst hoch.
+var HELPERS: Array = [
+	{"id": "mole", "name": "Maulwurf", "rate": 0.01, "cost": 15, "growth": 1.35, "desc": "Wühlt unten mit und bringt seinen Aushub selbst hoch."},
+	{"id": "kid", "name": "Nachbarskind", "rate": 0.04, "cost": 80, "growth": 1.35, "desc": "Gräbt neben dir. Wird mit Eis bezahlt."},
+]
+var EXTRAS: Array = [
+	{"id": "coffee", "name": "Kaffeemaschine", "cost": 300, "desc": "Alle Helfer graben 1,5× so schnell."},
+]
+var n: Dictionary = {"mole": 0, "kid": 0}
+var ex: Dictionary = {}
+
+# ---------- Aufträge ----------
+var best_mult := 1.0
+var best_load := 0.0
+var q_done: Dictionary = {}
+var QUESTS: Array = [
+	{"id": "d1", "t": "Grab 1 m tief", "r": 15},
+	{"id": "trip", "t": "Bring den ersten Eimer hoch", "r": 15},
+	{"id": "spade", "t": "Kauf einen Spaten", "r": 20},
+	{"id": "finds3", "t": "Sammle 3 Klumpen", "r": 30},
+	{"id": "takt2", "t": "Schaffe einen Takt von ×2", "r": 40},
+	{"id": "d10", "t": "Erreiche 10 m Tiefe", "r": 60},
+	{"id": "kid", "t": "Heuere ein Nachbarskind an", "r": 50},
+	{"id": "load40", "t": "Bring 40 kg auf einmal hoch", "r": 80},
+	{"id": "rare", "t": "Finde etwas Seltenes", "r": 80},
+	{"id": "d30", "t": "Erreiche 30 m: Sandstein", "r": 150},
+	{"id": "winch", "t": "Kauf die Seilwinde", "r": 150},
+	{"id": "epic", "t": "Finde etwas Episches", "r": 250},
+	{"id": "book5", "t": "Fülle 5 Seiten im Sammelbuch", "r": 300},
+	{"id": "d100", "t": "Erreiche 100 m Tiefe", "r": 400},
+]
+
+func quest_ok(id: String) -> bool:
+	match id:
+		"d1": return depth >= 1.0
+		"trip": return trips >= 1
+		"spade": return lv["tool"] >= 1
+		"finds3": return found_total >= 3
+		"takt2": return best_mult >= 2.0
+		"d10": return depth >= 10.0
+		"kid": return n["kid"] >= 1
+		"load40": return best_load >= 40.0
+		"rare": return best_rarity >= 1
+		"d30": return depth >= 30.0
+		"winch": return lv["climb"] >= 2
+		"epic": return best_rarity >= 2
+		"book5": return book.size() >= 5
+		"d100": return depth >= 100.0
+	return false
 
 # ---------- Fundstücke ----------
 const FIND_CHANCE := 0.035   # pro Schlag
@@ -208,6 +260,7 @@ func sell(knapp: bool = false, under_t: float = 0.0) -> void:
 	trips += 1
 	streak += 1
 	sold_kg += load_kg
+	best_load = maxf(best_load, load_kg)
 	var extra := "" if mults.is_empty() else "  (" + " · ".join(mults) + ")"
 	toast.emit("Gang %d: %s kg Aushub = %s%s" % [trips, fmt_num(load_kg, 1), fmt_eur(total), extra], "money")
 	if knapp:
@@ -219,6 +272,60 @@ func sell(knapp: bool = false, under_t: float = 0.0) -> void:
 	load_kg = 0.0
 	load_val = 0.0
 	save_game()
+
+func helper_rate() -> float:
+	var sum := 0.0
+	for h in HELPERS:
+		sum += float(h["rate"]) * int(n[h["id"]])
+	return sum * (1.5 if ex.has("coffee") else 1.0) * (3.0 if mod_is("mole") else 1.0)
+
+func helper_cost(h: Dictionary) -> float:
+	return ceilf(float(h["cost"]) * pow(float(h["growth"]), int(n[h["id"]])))
+
+func buy_helper(h: Dictionary) -> bool:
+	var c := helper_cost(h)
+	if eur < c:
+		return false
+	eur -= c
+	n[h["id"]] += 1
+	if n[h["id"]] == 1:
+		toast.emit("%s packt mit an!" % h["name"], "big")
+	save_game()
+	return true
+
+func buy_extra(e: Dictionary) -> bool:
+	if ex.has(e["id"]) or eur < float(e["cost"]):
+		return false
+	eur -= float(e["cost"])
+	ex[e["id"]] = true
+	toast.emit("%s gekauft!" % e["name"], "big")
+	save_game()
+	return true
+
+func open_quests() -> Array:
+	var out: Array = []
+	for i in QUESTS.size():
+		if not q_done.has(QUESTS[i]["id"]):
+			out.append(i)
+		if out.size() == 3:
+			break
+	return out
+
+## Prüft die drei offenen Aufträge und zahlt erledigte aus.
+func check_quests() -> void:
+	for i in open_quests():
+		var q: Dictionary = QUESTS[i]
+		if quest_ok(q["id"]):
+			q_done[q["id"]] = true
+			eur += float(q["r"])
+			total_eur += float(q["r"])
+			toast.emit("Auftrag erledigt: %s  ·  +%s" % [q["t"], fmt_eur(q["r"])], "big")
+
+func quest_lines() -> Array:
+	var out: Array = []
+	for i in open_quests():
+		out.append("%s  (+%d €)" % [QUESTS[i]["t"], QUESTS[i]["r"]])
+	return out
 
 func find_by_id(id: String) -> Dictionary:
 	for F in FINDS:
@@ -302,6 +409,7 @@ func save_game() -> void:
 		"depth": depth, "eur": eur, "total_eur": total_eur, "load_kg": load_kg, "load_val": load_val,
 		"lv": lv, "trips": trips, "sold_kg": sold_kg, "streak": streak, "best_trip": best_trip,
 		"bag": bag, "book": book, "found_total": found_total, "best_rarity": best_rarity, "sonar": sonar,
+		"n": n, "ex": ex, "q_done": q_done, "best_mult": best_mult, "best_load": best_load,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
@@ -329,6 +437,13 @@ func load_game() -> bool:
 	found_total = int(data.get("found_total", 0))
 	best_rarity = int(data.get("best_rarity", -1))
 	sonar = data.get("sonar", {})
+	best_mult = float(data.get("best_mult", 1.0))
+	best_load = float(data.get("best_load", 0.0))
+	ex = data.get("ex", {})
+	q_done = data.get("q_done", {})
+	var saved_n: Dictionary = data.get("n", {})
+	for k in n.keys():
+		n[k] = int(saved_n.get(k, 0))
 	book = {}
 	var saved_book: Dictionary = data.get("book", {})
 	for id in saved_book.keys():
@@ -343,6 +458,7 @@ func reset_game() -> void:
 	depth = 0.0; eur = 0.0; total_eur = 0.0; load_kg = 0.0; load_val = 0.0
 	trips = 0; sold_kg = 0.0; streak = 0; best_trip = 0.0; mod = {}
 	bag = []; book = {}; found_total = 0; best_rarity = -1; sonar = {}
+	n = {"mole": 0, "kid": 0}; ex = {}; q_done = {}; best_mult = 1.0; best_load = 0.0
 	for k in lv.keys():
 		lv[k] = 0
 	batt = lamp_max()

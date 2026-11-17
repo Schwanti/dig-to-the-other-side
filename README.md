@@ -46,9 +46,10 @@ Der Spielstand liegt in `user://spielstand.json`. Unter Windows ist das `%APPDAT
 
 **Paket 2 (fertig):** Klumpen in vier Seltenheitsstufen, Einsammeln per Klick, Aufklopfen oben, Sammelbuch an der Werkbank, Echolot.
 
+**Paket 3 (fertig):** Helfer (Maulwurf, Nachbarskinder im Loch), Kaffeemaschine, Gang-Karte „Maulwurf-Party“, 14 Aufträge im HUD und auf einer Tafel im Garten, Container mit wachsendem Aushubhaufen.
+
 **Als Nächstes für Kapitel 1** (aus dem Prototyp übernehmen):
-- Helfer (Maulwurf, Nachbarskinder) und Kaffeemaschine
-- Aufträge, Begegnungen (Herr Krüger und Co.), Tiefenleiste, Schilder, Tafel
+- Begegnungen (Herr Krüger und Co.), Tiefenleiste, Schilder, Querschnitt-Tafel
 - Töne und Musik
 - Startbildschirm, Pausenmenü, Sprachen (Deutsch und Englisch)
 

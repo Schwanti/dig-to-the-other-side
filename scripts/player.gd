@@ -17,6 +17,7 @@ var yaw := 0.0
 var pitch := -1.0
 var shake := 0.0
 var input_enabled := true
+var obstacles: Array = []   # [Mitte, Radius] von Dingen im Garten, durch die man nicht läuft
 
 var cam: Camera3D
 var lamp: SpotLight3D
@@ -118,6 +119,16 @@ func _keep_inside() -> void:
 		elif r > 22.0:
 			position.x *= 22.0 / r
 			position.z *= 22.0 / r
+		if position.z > 8.6 and absf(position.x) < 14.6:
+			position.z = 8.6   # Gartenzaun
+		for o in obstacles:
+			var c: Vector3 = o[0]
+			var rad: float = o[1]
+			var dv := Vector2(position.x - c.x, position.z - c.z)
+			if dv.length() < rad and dv.length() > 0.001:
+				var push := dv.normalized() * rad
+				position.x = c.x + push.x
+				position.z = c.z + push.y
 
 
 func toggle_climb() -> void:

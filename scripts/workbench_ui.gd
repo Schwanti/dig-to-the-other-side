@@ -97,6 +97,26 @@ func _rebuild() -> void:
 			b.disabled = Game.eur < float(n["cost"])
 			b.pressed.connect(_buy.bind(k))
 		list.add_child(b)
+	# Helfer: mehrfach kaufbar, jeder weitere wird teurer
+	for h in Game.HELPERS:
+		var cost := Game.helper_cost(h)
+		var hb := Button.new()
+		hb.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		hb.custom_minimum_size = Vector2(0, 52)
+		hb.text = "Helfer: %s  ×%d\n%s  ·  %s" % [h["name"], Game.n[h["id"]], h["desc"], Game.fmt_eur(cost)]
+		hb.disabled = Game.eur < cost
+		hb.pressed.connect(_buy_helper.bind(h))
+		list.add_child(hb)
+	for e in Game.EXTRAS:
+		if Game.ex.has(e["id"]):
+			continue
+		var eb := Button.new()
+		eb.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		eb.custom_minimum_size = Vector2(0, 52)
+		eb.text = "Extra: %s\n%s  ·  %s" % [e["name"], e["desc"], Game.fmt_eur(float(e["cost"]))]
+		eb.disabled = Game.eur < float(e["cost"])
+		eb.pressed.connect(_buy_extra.bind(e))
+		list.add_child(eb)
 
 
 ## Sammelbuch: gefundene Stücke mit Anzahl, unbekannte als ???
@@ -133,6 +153,16 @@ func _rebuild_book() -> void:
 		cell.add_theme_stylebox_override("panel", sb)
 		cell.add_child(l)
 		book_grid.add_child(cell)
+
+
+func _buy_helper(h: Dictionary) -> void:
+	if Game.buy_helper(h):
+		_rebuild()
+
+
+func _buy_extra(e: Dictionary) -> void:
+	if Game.buy_extra(e):
+		_rebuild()
 
 
 func _buy(k: String) -> void:

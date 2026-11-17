@@ -42,9 +42,10 @@ Der Spielstand liegt in `user://spielstand.json`. Unter Windows ist das `%APPDAT
 
 **Schritt 1 (fertig):** Kernschleife von Kapitel 1. Graben, Eimer, Lampe mit unscharfer Rückweg-Anzeige, Leiter, Verkaufen, Werkbank mit vier Ausrüstungsbereichen, Ohnmacht, Speichern.
 
+**Paket 1 (fertig):** Takt, Glückstreffer, Goldader, Tiefenbonus, „Knapp geschafft!“, Gang-Serie, Gang-Karten, Rekord-Gang.
+
 **Als Nächstes für Kapitel 1** (aus dem Prototyp übernehmen):
 - Klumpen, Aufklopfen, Sammelbuch, Echolot
-- Takt, Glückstreffer, Goldader, Tiefenbonus, Gang-Serie, Gang-Karten
 - Helfer (Maulwurf, Nachbarskinder) und Kaffeemaschine
 - Aufträge, Begegnungen (Herr Krüger und Co.), Tiefenleiste, Schilder, Tafel
 - Töne und Musik

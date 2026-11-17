@@ -17,6 +17,9 @@ var load_bar: ProgressBar
 var lamp_l: Label
 var lamp_bar: ProgressBar
 var journey_l: Label
+var boost_l: Label
+var takt_l: Label
+var takt_bar: ProgressBar
 var prompt_l: Label
 var gain_l: Label
 var cross: ColorRect
@@ -40,6 +43,28 @@ func _ready() -> void:
 	lamp_l = _label(v, 13, C_MUTED)
 	lamp_bar = _bar(v, C_GOOD)
 	journey_l = _label(v, 12, C_SKY)
+	boost_l = _label(v, 13, C_CAUTION)
+	boost_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	boost_l.custom_minimum_size = Vector2(250, 0)
+
+	# Takt unter dem Fadenkreuz
+	takt_l = Label.new()
+	takt_l.add_theme_font_size_override("font_size", 20)
+	takt_l.add_theme_color_override("font_color", C_ACCENT)
+	takt_l.add_theme_color_override("font_outline_color", Color.BLACK)
+	takt_l.add_theme_constant_override("outline_size", 6)
+	add_child(takt_l)
+	takt_bar = ProgressBar.new()
+	takt_bar.custom_minimum_size = Vector2(100, 5)
+	takt_bar.show_percentage = false
+	takt_bar.max_value = 1.0
+	var tfill := StyleBoxFlat.new()
+	tfill.bg_color = C_ACCENT
+	var tbg := StyleBoxFlat.new()
+	tbg.bg_color = Color(0, 0, 0, 0.5)
+	takt_bar.add_theme_stylebox_override("fill", tfill)
+	takt_bar.add_theme_stylebox_override("background", tbg)
+	add_child(takt_bar)
 
 	prompt_l = Label.new()
 	prompt_l.add_theme_font_size_override("font_size", 17)
@@ -104,7 +129,7 @@ func _bar(parent: Control, color: Color) -> ProgressBar:
 
 
 ## Wird jedes Bild von main.gd aufgerufen.
-func refresh(zone: String, prompt: String, urgent: bool) -> void:
+func refresh(zone: String, prompt: String, urgent: bool, extra: Dictionary = {}) -> void:
 	var L := Game.current_layer()
 	depth_l.text = Game.fmt_depth(Game.depth)
 	layer_l.text = L["name"]
@@ -139,9 +164,62 @@ func refresh(zone: String, prompt: String, urgent: bool) -> void:
 	gain_l.position = vp / 2.0 + Vector2(14, -34)
 	toast_box.position = Vector2(vp.x - 396.0, 16.0)
 
+	boost_l.text = extra.get("boosts", "")
+	boost_l.visible = boost_l.text != ""
+	var c: int = extra.get("combo", 0)
+	var cm: float = extra.get("combo_mult", 1.0)
+	var show_takt := c > 2 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	takt_l.visible = show_takt
+	takt_bar.visible = show_takt
+	if show_takt:
+		takt_l.text = "TAKT ×" + Game.fmt_num(cm, 1)
+		takt_l.add_theme_color_override("font_color", Color("#ffcf3f") if cm >= 2.5 else C_ACCENT)
+		takt_l.reset_size()
+		takt_l.position = Vector2((vp.x - takt_l.size.x) / 2.0, vp.y / 2.0 + 18.0)
+		takt_bar.value = minf(float(c), 30.0) / 30.0
+		takt_bar.position = Vector2((vp.x - 100.0) / 2.0, vp.y / 2.0 + 18.0 + takt_l.size.y)
 
-func show_gain(text: String) -> void:
+
+func show_takt_level(_mult: float) -> void:
+	var tw := create_tween()
+	takt_l.scale = Vector2(1.3, 1.3)
+	tw.tween_property(takt_l, "scale", Vector2.ONE, 0.25)
+
+
+## Gang-Karte in der Bildmitte, blendet sich selbst wieder aus.
+func show_mod_card(kicker: String, title: String, desc: String) -> void:
+	var p := PanelContainer.new()
+	var sb := _plate()
+	sb.border_color = C_SKY
+	sb.set_border_width_all(2)
+	sb.content_margin_left = 26
+	sb.content_margin_right = 26
+	p.add_theme_stylebox_override("panel", sb)
+	var v := VBoxContainer.new()
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	p.add_child(v)
+	for row in [[kicker, 13, C_MUTED], [title, 28, C_SKY], [desc, 16, C_TEXT]]:
+		var l := Label.new()
+		l.text = row[0]
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.add_theme_font_size_override("font_size", row[1])
+		l.add_theme_color_override("font_color", row[2])
+		v.add_child(l)
+	add_child(p)
+	p.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	p.position = Vector2((vp.x - p.size.x) / 2.0, vp.y * 0.36)
+	p.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(p, "modulate:a", 1.0, 0.2)
+	tw.tween_interval(2.2)
+	tw.tween_property(p, "modulate:a", 0.0, 0.5)
+	tw.tween_callback(p.queue_free)
+
+
+func show_gain(text: String, color: Color = C_ACCENT) -> void:
 	gain_l.text = text
+	gain_l.add_theme_color_override("font_color", color)
 	gain_l.modulate.a = 1.0
 	var tw := create_tween()
 	tw.tween_property(gain_l, "modulate:a", 0.0, 0.6)
@@ -155,6 +233,7 @@ func show_toast(text: String, kind: String = "") -> void:
 		"money": sb.border_color = C_GOOD
 		"warn": sb.border_color = C_WARN
 		"big": sb.border_color = C_SKY
+		"gold": sb.border_color = Color("#ffcf3f")
 		_: sb.border_color = C_ACCENT
 	p.add_theme_stylebox_override("panel", sb)
 	var l := Label.new()

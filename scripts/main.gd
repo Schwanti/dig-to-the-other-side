@@ -18,10 +18,25 @@ var bench_ui
 var sun: DirectionalLight3D
 var env: Environment
 var dirt: CPUParticles3D
+var sparks: CPUParticles3D
+var gold_disc: MeshInstance3D
+var gold_mat: StandardMaterial3D
 
 var cooldown := 0.0
 var warned := 0
 var save_timer := 0.0
+var clock := 0.0            # Spielzeit in Sekunden, für Takt und Goldader
+
+# Takt: wer im Rhythmus gräbt, gräbt schneller (bis ×2,5)
+var combo := 0
+var last_hit := -10.0
+var combo_level := 0
+# Tiefenbonus: Zeit unten in diesem Gang
+var under_t := 0.0
+var last_bonus_step := 0
+# Goldader: taucht ab und zu in der Sohle auf
+var gold_until := -1.0
+var gold_timer := 45.0
 
 
 func _ready() -> void:
@@ -40,7 +55,9 @@ func _ready() -> void:
 	player.dig_pressed.connect(_on_dig)
 	player.use_pressed.connect(_on_use)
 	player.arrived_surface.connect(_on_arrived_surface)
+	player.descend_started.connect(_on_descend)
 	bench_ui.closed.connect(func(): player.input_enabled = true)
+	_build_gold_disc()
 
 	if Game.load_game() and Game.depth > 0.05:
 		player.place_on_surface()
@@ -52,6 +69,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	cooldown -= delta
+	clock += delta
 	# Presslufthammer: gedrückt halten hämmert von selbst
 	if Game.lv["tool"] == 3 and Input.is_action_pressed("dig") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_on_dig()
@@ -59,10 +77,22 @@ func _process(delta: float) -> void:
 	_update_lamp(delta)
 	shaft.update_depth(Game.depth)
 	_update_light()
+	_update_bonus(delta)
+	_update_gold(delta)
+	if clock - last_hit > 0.8:
+		combo = 0
+		combo_level = 0
 
 	var zone := Game.return_zone(player.position.y, player.state == "surface" or player.position.y > -1.0)
 	var p := _prompt(zone)
-	hud.refresh(zone, p[0], p[1])
+	var boosts := PackedStringArray()
+	if Game.depth_bonus(under_t) > 1.0:
+		boosts.append("Tiefenbonus " + Game.fmt_x(Game.depth_bonus(under_t)))
+	if Game.streak > 0:
+		boosts.append("Serie %d %s" % [Game.streak, Game.fmt_x(Game.streak_mult())])
+	if not Game.mod.is_empty():
+		boosts.append(Game.mod["name"])
+	hud.refresh(zone, p[0], p[1], {"combo": combo, "combo_mult": _combo_mult(), "boosts": " · ".join(boosts)})
 
 	save_timer += delta
 	if save_timer > 5.0:
@@ -91,18 +121,87 @@ func _on_dig() -> void:
 		Game.toast.emit("Der Eimer ist voll. Ab nach oben mit F!", "warn")
 		return
 	cooldown = COOLDOWN[Game.lv["tool"]]
-	var r := Game.dig(0.03 * Game.tier("tool"), room)
+
+	# Takt: Schläge innerhalb von 0,8 s bauen ihn auf
+	if clock - last_hit < 0.8:
+		combo += 2 if Game.mod_is("combo") else 1
+	else:
+		combo = 0
+	last_hit = clock
+	var mult := _combo_mult()
+	var level := 3 if mult >= 2.5 else (2 if mult >= 2.0 else (1 if mult >= 1.5 else 0))
+	if level > combo_level:
+		hud.show_takt_level(mult)
+	combo_level = level
+
+	var crit := randf() < (0.1 if Game.mod_is("crit") else 0.05)
+	var gold := _gold_on()
+	var power := 0.03 * Game.tier("tool") * mult * (5.0 if crit else 1.0) * (1.5 if Game.mod_is("soft") else 1.0)
+	var r := Game.dig(power, room)
 	Game.load_kg += r["kg"]
-	Game.load_val += r["val"]
+	Game.load_val += r["val"] * (5.0 if gold else 1.0)
+
 	player.do_swing()
-	player.shake = 0.02
+	player.shake = 0.05 if crit else 0.02
 	var L := Game.current_layer()
-	dirt.global_position = _aim_point()
+	var at := _aim_point()
+	dirt.global_position = at
 	dirt.color = L["spot"]
 	dirt.restart()
-	hud.show_gain("+" + Game.fmt_len(r["m"]))
+	if crit or gold:
+		sparks.global_position = at
+		sparks.color = Color.WHITE if crit else Color("#ffcf3f")
+		sparks.amount = 30 if crit else 10
+		sparks.restart()
+	if crit:
+		hud.show_gain("GLÜCKSTREFFER +" + Game.fmt_len(r["m"]), Color.WHITE)
+	elif gold:
+		hud.show_gain("GOLD ×5 +" + Game.fmt_len(r["m"]), Color("#ffcf3f"))
+	else:
+		hud.show_gain("+" + Game.fmt_len(r["m"]))
 	if Game.load_kg >= Game.cap_kg() - 0.000001:
 		Game.toast.emit("Eimer voll! Ab nach oben mit F.", "warn")
+
+
+func _combo_mult() -> float:
+	return 1.0 + minf(float(combo), 30.0) / 20.0
+
+
+func _gold_on() -> bool:
+	return clock < gold_until
+
+
+## Tiefenbonus wächst, solange man unten gräbt.
+func _update_bonus(delta: float) -> void:
+	if player.state != "bottom" or Game.depth <= 1.0 or bench_ui.visible:
+		return
+	under_t += delta
+	var step := int(minf(15.0, floorf(under_t / 10.0)))
+	if step > last_bonus_step:
+		last_bonus_step = step
+		if step % 5 == 0:
+			Game.toast.emit("Tiefenbonus %s! Je länger du unten bleibst, desto mehr ist der Eimer wert." % Game.fmt_x(Game.depth_bonus(under_t)), "gold")
+
+
+## Goldader: etwa alle ein bis zwei Minuten leuchtet die Sohle 10 Sekunden lang golden.
+func _update_gold(delta: float) -> void:
+	if player.state == "bottom" and not _gold_on() and not bench_ui.visible:
+		gold_timer -= delta
+		if gold_timer <= 0.0:
+			gold_timer = 50.0 + randf() * 60.0
+			gold_until = clock + 10.0
+			Game.toast.emit("GOLDADER! 10 Sekunden lang ist jeder Schlag 5× so viel wert.", "gold")
+	gold_disc.visible = _gold_on()
+	if gold_disc.visible:
+		gold_disc.position.y = -Game.depth + 0.012
+		gold_mat.albedo_color.a = 0.25 + 0.15 * sin(clock * 9.0)
+
+
+func _on_descend() -> void:
+	var m := Game.roll_mod()
+	if m["id"] == "gold":
+		gold_timer = 10.0
+	hud.show_mod_card("Gang %d%s" % [Game.trips + 1, ("  ·  Serie %d" % Game.streak) if Game.streak > 0 else ""], m["name"], m["desc"])
 
 
 ## Wo trifft der Blick die Sohle?
@@ -125,9 +224,18 @@ func _aim_point() -> Vector3:
 
 # ---------- Hochkommen, Verkaufen, Ohnmacht ----------
 func _on_arrived_surface() -> void:
-	Game.sell()
+	var knapp := Game.batt / Game.lamp_max() < 0.1 and Game.depth > 3.0 and Game.load_kg > 0.0
+	Game.sell(knapp, under_t)
+	_end_trip()
+
+
+func _end_trip() -> void:
 	Game.batt = Game.lamp_max()
+	Game.mod = {}
 	warned = 0
+	under_t = 0.0
+	last_bonus_step = 0
+	gold_until = -1.0
 
 
 func _update_lamp(delta: float) -> void:
@@ -148,10 +256,13 @@ func _update_lamp(delta: float) -> void:
 func _faint() -> void:
 	Game.load_kg = 0.0
 	Game.load_val = 0.0
-	Game.batt = Game.lamp_max()
-	warned = 0
+	var had_streak := Game.streak
+	Game.streak = 0
+	_end_trip()
 	player.place_on_surface()
 	Game.toast.emit("Licht aus! Die Nachbarskinder haben dich rausgezogen. Der Eimer ist weg.", "warn")
+	if had_streak > 1:
+		Game.toast.emit("Deine Serie von %d Gängen ist gerissen." % had_streak, "warn")
 	Game.save_game()
 
 
@@ -174,6 +285,8 @@ func _prompt(zone: String) -> Array:
 				return ["F  Riskant! Jetzt hoch, sonst wird es dunkel!", true]
 			if zone == "knapp":
 				return ["F  Die Lampe wird knapp. Bald hochklettern!", true]
+			if _gold_on():
+				return ["Klick  GOLDADER! Schnell graben, jeder Schlag ×5", true]
 			return ["Klick  graben   ·   F  hochklettern", false]
 		"climb":
 			return ["Klettert %s …   F  umkehren" % ("hoch" if player.climb_dir > 0 else "runter"), false]
@@ -372,3 +485,33 @@ func _build_particles() -> void:
 	pm.material = pmat
 	dirt.mesh = pm
 	add_child(dirt)
+
+	# Funken für Glückstreffer und Goldader: leuchten von selbst
+	sparks = dirt.duplicate() as CPUParticles3D
+	var sm := BoxMesh.new()
+	sm.size = Vector3(0.035, 0.035, 0.035)
+	var smat := StandardMaterial3D.new()
+	smat.vertex_color_use_as_albedo = true
+	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	sm.material = smat
+	sparks.mesh = sm
+	sparks.initial_velocity_max = 4.0
+	add_child(sparks)
+
+
+func _build_gold_disc() -> void:
+	gold_mat = StandardMaterial3D.new()
+	gold_mat.albedo_color = Color(1.0, 0.81, 0.25, 0.3)
+	gold_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	gold_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	gold_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	var cm := CylinderMesh.new()
+	cm.top_radius = Game.R - 0.05
+	cm.bottom_radius = Game.R - 0.05
+	cm.height = 0.01
+	cm.radial_segments = 40
+	gold_disc = MeshInstance3D.new()
+	gold_disc.mesh = cm
+	gold_disc.material_override = gold_mat
+	gold_disc.visible = false
+	add_child(gold_disc)

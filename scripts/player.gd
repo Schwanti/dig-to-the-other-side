@@ -6,6 +6,7 @@ signal dig_pressed
 signal use_pressed
 signal arrived_surface
 signal arrived_bottom
+signal descend_started
 
 const LOOK_SPEED := 0.0022
 const RUNG_STEP := 0.33
@@ -125,6 +126,7 @@ func toggle_climb() -> void:
 			start_climb(1)
 		"surface":
 			start_climb(-1)
+			descend_started.emit()
 		"climb":
 			climb_dir = -climb_dir
 

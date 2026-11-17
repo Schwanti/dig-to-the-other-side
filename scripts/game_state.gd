@@ -53,6 +53,18 @@ var batt := 60.0
 var lv: Dictionary = {"tool": 0, "cap": 0, "lamp": 0, "climb": 0}
 var trips := 0
 var sold_kg := 0.0
+var streak := 0          # Gänge in Folge ohne Ohnmacht
+var best_trip := 0.0
+
+# Gang-Karte: jeder Gang hat einen eigenen Dreh (wird nicht gespeichert)
+var mod: Dictionary = {}
+var MODS: Array = [
+	{"id": "soft", "name": "Weicher Boden", "desc": "Graben ×1,5"},
+	{"id": "lamp", "name": "Frische Batterien", "desc": "Lampe +30 %"},
+	{"id": "combo", "name": "Rhythmus im Blut", "desc": "Der Takt baut sich doppelt so schnell auf"},
+	{"id": "gold", "name": "Goldene Stunde", "desc": "Eine Goldader nach 10 Sekunden"},
+	{"id": "crit", "name": "Glückspilz", "desc": "Glückstreffer doppelt so oft"},
+]
 
 
 func _ready() -> void:
@@ -121,15 +133,56 @@ func buy(k: String) -> bool:
 	save_game()
 	return true
 
-func sell() -> void:
+func mod_is(id: String) -> bool:
+	return not mod.is_empty() and mod["id"] == id
+
+func roll_mod() -> Dictionary:
+	mod = MODS[randi() % MODS.size()]
+	if mod["id"] == "lamp":
+		batt = lamp_max() * 1.3
+	return mod
+
+## Je länger man unten gräbt, desto mehr ist der Eimer wert (bis ×2,5).
+func depth_bonus(under_t: float) -> float:
+	return 1.0 + minf(15.0, floorf(under_t / 10.0)) * 0.1
+
+## Gänge in Folge ohne Ohnmacht (bis ×1,5).
+func streak_mult() -> float:
+	return 1.0 + minf(float(streak), 10.0) * 0.05
+
+func fmt_x(v: float) -> String:
+	return "×" + fmt_num(v, 1)
+
+## Verkauft den Eimer mit allen Boni. knapp = mit fast leerer Lampe oben angekommen.
+func sell(knapp: bool = false, under_t: float = 0.0) -> void:
 	if load_kg <= 0.0:
 		return
-	var total := roundf(load_val)
+	var mults := PackedStringArray()
+	var m := 1.0
+	var deep := depth_bonus(under_t)
+	if deep > 1.0:
+		m *= deep
+		mults.append("Tiefenbonus " + fmt_x(deep))
+	if streak > 0:
+		m *= streak_mult()
+		mults.append("Serie " + fmt_x(streak_mult()))
+	if knapp:
+		m *= 1.5
+		mults.append("Knapp ×1,5")
+	var total := roundf(load_val * m)
 	eur += total
 	total_eur += total
 	trips += 1
+	streak += 1
 	sold_kg += load_kg
-	toast.emit("Gang %d: %s kg Aushub = %s" % [trips, fmt_num(load_kg, 1), fmt_eur(total)], "money")
+	var extra := "" if mults.is_empty() else "  (" + " · ".join(mults) + ")"
+	toast.emit("Gang %d: %s kg Aushub = %s%s" % [trips, fmt_num(load_kg, 1), fmt_eur(total), extra], "money")
+	if knapp:
+		toast.emit("KNAPP GESCHAFFT! Der ganze Gang zählt ×1,5.", "gold")
+	if total > best_trip:
+		if trips > 1:
+			toast.emit("Neuer Rekord-Gang: %s!" % fmt_eur(total), "money")
+		best_trip = total
 	load_kg = 0.0
 	load_val = 0.0
 	save_game()
@@ -151,7 +204,7 @@ func return_zone(player_y: float, at_base: bool) -> String:
 func save_game() -> void:
 	var data := {
 		"depth": depth, "eur": eur, "total_eur": total_eur, "load_kg": load_kg, "load_val": load_val,
-		"lv": lv, "trips": trips, "sold_kg": sold_kg,
+		"lv": lv, "trips": trips, "sold_kg": sold_kg, "streak": streak, "best_trip": best_trip,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
@@ -173,6 +226,8 @@ func load_game() -> bool:
 	load_val = float(data.get("load_val", 0.0))
 	trips = int(data.get("trips", 0))
 	sold_kg = float(data.get("sold_kg", 0.0))
+	streak = int(data.get("streak", 0))
+	best_trip = float(data.get("best_trip", 0.0))
 	var saved_lv: Dictionary = data.get("lv", {})
 	for k in lv.keys():
 		lv[k] = int(saved_lv.get(k, 0))
@@ -181,7 +236,7 @@ func load_game() -> bool:
 
 func reset_game() -> void:
 	depth = 0.0; eur = 0.0; total_eur = 0.0; load_kg = 0.0; load_val = 0.0
-	trips = 0; sold_kg = 0.0
+	trips = 0; sold_kg = 0.0; streak = 0; best_trip = 0.0; mod = {}
 	for k in lv.keys():
 		lv[k] = 0
 	batt = lamp_max()

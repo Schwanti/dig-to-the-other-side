@@ -1,0 +1,4 @@
+# Godot 4: Cache und importierte Dateien werden beim Öffnen neu erzeugt
+.godot/
+/android/
+*.tmp

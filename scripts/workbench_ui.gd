@@ -5,6 +5,8 @@ signal closed
 
 var list: VBoxContainer
 var money_l: Label
+var book_title: Label
+var book_grid: GridContainer
 
 
 func _ready() -> void:
@@ -45,6 +47,15 @@ func _ready() -> void:
 	list = VBoxContainer.new()
 	list.add_theme_constant_override("separation", 8)
 	v.add_child(list)
+	book_title = Label.new()
+	book_title.add_theme_font_size_override("font_size", 18)
+	book_title.add_theme_color_override("font_color", Color("#a99686"))
+	v.add_child(book_title)
+	book_grid = GridContainer.new()
+	book_grid.columns = 5
+	book_grid.add_theme_constant_override("h_separation", 6)
+	book_grid.add_theme_constant_override("v_separation", 6)
+	v.add_child(book_grid)
 	var close := Button.new()
 	close.text = "Weiter graben  (E)"
 	close.custom_minimum_size = Vector2(0, 44)
@@ -68,6 +79,7 @@ func _rebuild() -> void:
 	for c in list.get_children():
 		list.remove_child(c)
 		c.queue_free()
+	_rebuild_book()
 	money_l.text = "Kasse: " + Game.fmt_eur(Game.eur)
 	for k in Game.TRACKS.keys():
 		var T: Dictionary = Game.TRACKS[k]
@@ -85,6 +97,42 @@ func _rebuild() -> void:
 			b.disabled = Game.eur < float(n["cost"])
 			b.pressed.connect(_buy.bind(k))
 		list.add_child(b)
+
+
+## Sammelbuch: gefundene Stücke mit Anzahl, unbekannte als ???
+func _rebuild_book() -> void:
+	for c in book_grid.get_children():
+		book_grid.remove_child(c)
+		c.queue_free()
+	book_title.text = "SAMMELBUCH  %d / %d" % [Game.book.size(), Game.FINDS.size()]
+	for F in Game.FINDS:
+		var rarity: Dictionary = Game.RARITY[F["r"]]
+		var cell := PanelContainer.new()
+		cell.custom_minimum_size = Vector2(112, 54)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color("#2b2119")
+		sb.set_border_width_all(1)
+		sb.set_corner_radius_all(8)
+		sb.content_margin_left = 6
+		sb.content_margin_right = 6
+		var l := Label.new()
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.add_theme_font_size_override("font_size", 12)
+		if Game.book.has(F["id"]):
+			sb.border_color = rarity["color"]
+			l.text = "%s\n× %d" % [F["name"], Game.book[F["id"]]]
+			l.add_theme_color_override("font_color", rarity["color"])
+		else:
+			sb.border_color = Color("#3d2f25")
+			l.text = "???"
+			l.tooltip_text = rarity["name"]
+			l.mouse_filter = Control.MOUSE_FILTER_STOP
+			l.add_theme_color_override("font_color", Color("#a99686"))
+		cell.add_theme_stylebox_override("panel", sb)
+		cell.add_child(l)
+		book_grid.add_child(cell)
 
 
 func _buy(k: String) -> void:

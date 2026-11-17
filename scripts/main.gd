@@ -37,6 +37,10 @@ var last_bonus_step := 0
 # Goldader: taucht ab und zu in der Sohle auf
 var gold_until := -1.0
 var gold_timer := 45.0
+# Klumpen, die in der Sohle liegen: {"node": Node3D, "F": Fundstück}
+var finds: Array = []
+var reveal_queue: Array = []
+var revealing := false
 
 
 func _ready() -> void:
@@ -79,6 +83,9 @@ func _process(delta: float) -> void:
 	_update_light()
 	_update_bonus(delta)
 	_update_gold(delta)
+	_update_finds()
+	if not Game.sonar.is_empty() and Game.depth >= float(Game.sonar["d"]):
+		_sonar_reached()
 	if clock - last_hit > 0.8:
 		combo = 0
 		combo_level = 0
@@ -92,7 +99,13 @@ func _process(delta: float) -> void:
 		boosts.append("Serie %d %s" % [Game.streak, Game.fmt_x(Game.streak_mult())])
 	if not Game.mod.is_empty():
 		boosts.append(Game.mod["name"])
-	hud.refresh(zone, p[0], p[1], {"combo": combo, "combo_mult": _combo_mult(), "boosts": " · ".join(boosts)})
+	var sonar_text := ""
+	if not Game.sonar.is_empty():
+		sonar_text = "Echolot: %s · noch %s" % [Game.sonar_kind()["name"], Game.fmt_len(maxf(0.0, float(Game.sonar["d"]) - Game.depth))]
+	hud.refresh(zone, p[0], p[1], {
+		"combo": combo, "combo_mult": _combo_mult(), "boosts": " · ".join(boosts),
+		"sonar": sonar_text, "aim_find": _aimed_find() >= 0, "bag": Game.bag.size(),
+	})
 
 	save_timer += delta
 	if save_timer > 5.0:
@@ -114,6 +127,11 @@ func _on_dig() -> void:
 		Game.toast.emit("Hier oben wird nicht gegraben. Mit F geht es die Leiter runter.", "")
 		return
 	if player.state != "bottom":
+		return
+	var aimed := _aimed_find()
+	if aimed >= 0:
+		cooldown = 0.15
+		_collect(aimed)
 		return
 	var room := (Game.cap_kg() - Game.load_kg) / Game.KG_PER_M
 	if room <= 0.000001:
@@ -159,8 +177,158 @@ func _on_dig() -> void:
 		hud.show_gain("GOLD ×5 +" + Game.fmt_len(r["m"]), Color("#ffcf3f"))
 	else:
 		hud.show_gain("+" + Game.fmt_len(r["m"]))
+	if randf() < Game.FIND_CHANCE * (2.0 if Game.mod_is("finds") else 1.0):
+		_spawn_find(_scatter(at), Game.roll_find())
 	if Game.load_kg >= Game.cap_kg() - 0.000001:
 		Game.toast.emit("Eimer voll! Ab nach oben mit F.", "warn")
+
+
+# ---------- Klumpen ----------
+## Ein Klumpen zeigt nur, wie selten er ist. Was drin ist, sieht man erst oben beim Aufklopfen.
+func _spawn_find(at: Vector3, F: Dictionary) -> void:
+	var r: int = F["r"]
+	var col: Color = Game.RARITY[r]["color"]
+	var g := Node3D.new()
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color("#6e5a46")
+	mat.roughness = 0.95
+	if r > 0:
+		mat.emission_enabled = true
+		mat.emission = col
+		mat.emission_energy_multiplier = 0.3 + r * 0.35
+	for part in [[0.09, Vector3(0, 0.04, 0), Vector3(1.3, 0.8, 1.05)], [0.05, Vector3(0.07, 0.03, 0.03), Vector3.ONE]]:
+		var sm := SphereMesh.new()
+		sm.radius = part[0]
+		sm.height = part[0] * 1.5
+		sm.radial_segments = 7
+		sm.rings = 3
+		var mi := MeshInstance3D.new()
+		mi.mesh = sm
+		mi.material_override = mat
+		mi.position = part[1]
+		mi.scale = part[2]
+		mi.rotation = Vector3(randf(), randf() * TAU, randf())
+		g.add_child(mi)
+	if r >= 1:
+		# Lichtsäule und Schein wie bei einer Belohnung
+		var bm := CylinderMesh.new()
+		bm.top_radius = 0.025
+		bm.bottom_radius = 0.025
+		bm.height = 2.4
+		var bmat := StandardMaterial3D.new()
+		bmat.albedo_color = Color(col, 0.5)
+		bmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		bmat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		var beam := MeshInstance3D.new()
+		beam.mesh = bm
+		beam.material_override = bmat
+		beam.position.y = 1.2
+		g.add_child(beam)
+		g.set_meta("beam_mat", bmat)
+		var glow := OmniLight3D.new()
+		glow.light_color = col
+		glow.omni_range = 2.2
+		glow.light_energy = 0.8
+		glow.position.y = 0.2
+		g.add_child(glow)
+		Game.toast.emit("Da glitzert was: %s!" % Game.RARITY[r]["name"], "big")
+	add_child(g)
+	g.position = Vector3(at.x, -Game.depth - 0.015, at.z)
+	finds.append({"node": g, "F": F})
+	# Höchstens vier Klumpen gleichzeitig: der älteste verschwindet
+	if finds.size() > 4:
+		var old: Dictionary = finds.pop_front()
+		old["node"].queue_free()
+
+
+func _scatter(p: Vector3) -> Vector3:
+	var q := p + Vector3(randf_range(-0.25, 0.25), 0.0, randf_range(-0.25, 0.25))
+	var r := Vector2(q.x, q.z).length()
+	if r > Game.R - 0.25:
+		q.x *= (Game.R - 0.25) / r
+		q.z *= (Game.R - 0.25) / r
+	return q
+
+
+## Liegt ein Klumpen unter dem Fadenkreuz (höchstens 3,2 m entfernt)?
+func _aimed_find() -> int:
+	if player.state != "bottom" or finds.is_empty():
+		return -1
+	var cam: Camera3D = player.cam
+	var o := cam.global_position
+	var d := -cam.global_transform.basis.z
+	var best := -1
+	var best_t := 3.2
+	for i in finds.size():
+		var c: Vector3 = finds[i]["node"].global_position + Vector3(0, 0.05, 0)
+		var t := (c - o).dot(d)
+		if t < 0.0 or t > best_t:
+			continue
+		if (o + d * t).distance_to(c) < 0.17:
+			best = i
+			best_t = t
+	return best
+
+
+func _collect(i: int) -> void:
+	var f: Dictionary = finds[i]
+	finds.remove_at(i)
+	var F: Dictionary = f["F"]
+	var r: int = F["r"]
+	Game.bag.append(F["id"])
+	Game.found_total += 1
+	Game.best_rarity = maxi(Game.best_rarity, r)
+	Game.toast.emit("Klumpen eingesammelt. Er %s (%s). Was drin ist, siehst du oben." % [Game.RARITY[r]["glow"], Game.RARITY[r]["name"]], "big" if r >= 2 else "")
+	# Der Klumpen fliegt in die Hand
+	var node: Node3D = f["node"]
+	for c in node.get_children():
+		if c is OmniLight3D or (c is MeshInstance3D and (c as MeshInstance3D).position.y > 1.0):
+			c.visible = false
+	var target: Vector3 = player.cam.global_position + Vector3(0, -0.3, 0)
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(node, "global_position", target, 0.35)
+	tw.tween_property(node, "scale", Vector3.ONE * 0.05, 0.35)
+	tw.chain().tween_callback(node.queue_free)
+
+
+## Klumpen liegen in der Sohle und wandern mit ihr nach unten. Lichtsäulen pulsieren.
+func _update_finds() -> void:
+	for f in finds:
+		var node: Node3D = f["node"]
+		node.position.y = -Game.depth - 0.015
+		if node.has_meta("beam_mat"):
+			var bm: StandardMaterial3D = node.get_meta("beam_mat")
+			bm.albedo_color.a = 0.35 + 0.25 * sin(clock * 5.0)
+
+
+func _sonar_reached() -> void:
+	var k := Game.sonar_kind()
+	var F := Game.pick_sonar_find()
+	Game.sonar = {}
+	var at := _scatter(_aim_point()) if player.state == "bottom" else Vector3(randf_range(-0.8, 0.8), 0, randf_range(-0.8, 0.8))
+	_spawn_find(at, F)
+	Game.toast.emit("Echolot-Ziel erreicht: %s! Der Klumpen liegt in der Sohle." % k["name"], "big")
+
+
+## Oben werden die Klumpen einzeln aufgeklopft: erst Klopfen und Spannung, dann der Inhalt.
+func _queue_reveal(items: Array) -> void:
+	reveal_queue.append_array(items)
+	if revealing:
+		return
+	revealing = true
+	while not reveal_queue.is_empty():
+		var id: String = reveal_queue.pop_front()
+		var F := Game.find_by_id(id)
+		var fast := reveal_queue.size() > 3
+		hud.show_reveal_start(Game.RARITY[F["r"]], reveal_queue.size() + 1)
+		await get_tree().create_timer(0.45 if fast else 0.85).timeout
+		var res := Game.reveal(id)
+		hud.show_reveal_result(res, Game.RARITY[F["r"]])
+		await get_tree().create_timer(0.7 if fast else 1.4).timeout
+	hud.hide_reveal()
+	revealing = false
 
 
 func _combo_mult() -> float:
@@ -224,9 +392,15 @@ func _aim_point() -> Vector3:
 
 # ---------- Hochkommen, Verkaufen, Ohnmacht ----------
 func _on_arrived_surface() -> void:
-	var knapp := Game.batt / Game.lamp_max() < 0.1 and Game.depth > 3.0 and Game.load_kg > 0.0
+	var items: Array = Game.bag.duplicate()
+	Game.bag.clear()
+	var knapp := Game.batt / Game.lamp_max() < 0.1 and Game.depth > 3.0 and (Game.load_kg > 0.0 or not items.is_empty())
 	Game.sell(knapp, under_t)
 	_end_trip()
+	if not items.is_empty():
+		get_tree().create_timer(0.7).timeout.connect(_queue_reveal.bind(items))
+	if Game.sonar.is_empty():
+		get_tree().create_timer(1.5 + items.size() * 0.4).timeout.connect(Game.new_sonar)
 
 
 func _end_trip() -> void:
@@ -256,6 +430,16 @@ func _update_lamp(delta: float) -> void:
 func _faint() -> void:
 	Game.load_kg = 0.0
 	Game.load_val = 0.0
+	# Die Hälfte der Klumpen geht verloren
+	var lost := Game.bag.size() / 2
+	for i in lost:
+		Game.bag.remove_at(randi() % Game.bag.size())
+	var items: Array = Game.bag.duplicate()
+	Game.bag.clear()
+	if not items.is_empty():
+		get_tree().create_timer(1.5).timeout.connect(_queue_reveal.bind(items))
+	if lost > 0:
+		Game.toast.emit("%d Klumpen sind beim Rausziehen verloren gegangen." % lost, "warn")
 	var had_streak := Game.streak
 	Game.streak = 0
 	_end_trip()
@@ -285,6 +469,8 @@ func _prompt(zone: String) -> Array:
 				return ["F  Riskant! Jetzt hoch, sonst wird es dunkel!", true]
 			if zone == "knapp":
 				return ["F  Die Lampe wird knapp. Bald hochklettern!", true]
+			if _aimed_find() >= 0:
+				return ["Klick  Klumpen aufheben", false]
 			if _gold_on():
 				return ["Klick  GOLDADER! Schnell graben, jeder Schlag ×5", true]
 			return ["Klick  graben   ·   F  hochklettern", false]

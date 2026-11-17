@@ -44,8 +44,9 @@ Der Spielstand liegt in `user://spielstand.json`. Unter Windows ist das `%APPDAT
 
 **Paket 1 (fertig):** Takt, Glückstreffer, Goldader, Tiefenbonus, „Knapp geschafft!“, Gang-Serie, Gang-Karten, Rekord-Gang.
 
+**Paket 2 (fertig):** Klumpen in vier Seltenheitsstufen, Einsammeln per Klick, Aufklopfen oben, Sammelbuch an der Werkbank, Echolot.
+
 **Als Nächstes für Kapitel 1** (aus dem Prototyp übernehmen):
-- Klumpen, Aufklopfen, Sammelbuch, Echolot
 - Helfer (Maulwurf, Nachbarskinder) und Kaffeemaschine
 - Aufträge, Begegnungen (Herr Krüger und Co.), Tiefenleiste, Schilder, Tafel
 - Töne und Musik

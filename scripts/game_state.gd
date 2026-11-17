@@ -64,7 +64,40 @@ var MODS: Array = [
 	{"id": "combo", "name": "Rhythmus im Blut", "desc": "Der Takt baut sich doppelt so schnell auf"},
 	{"id": "gold", "name": "Goldene Stunde", "desc": "Eine Goldader nach 10 Sekunden"},
 	{"id": "crit", "name": "Glückspilz", "desc": "Glückstreffer doppelt so oft"},
+	{"id": "finds", "name": "Fundreiche Schicht", "desc": "Doppelt so viele Klumpen"},
 ]
+
+# ---------- Fundstücke ----------
+const FIND_CHANCE := 0.035   # pro Schlag
+var RARITY: Array = [
+	{"name": "Gewöhnlich", "color": Color("#c9c1b6"), "w": 70, "glow": "ist matt und schwer"},
+	{"name": "Selten", "color": Color("#7fd0ff"), "w": 22, "glow": "schimmert blau"},
+	{"name": "Episch", "color": Color("#c58bff"), "w": 7, "glow": "leuchtet violett"},
+	{"name": "Legendär", "color": Color("#ffcf3f"), "w": 1, "glow": "glüht golden"},
+]
+# layers = in welchen Schichten (Index in LAYERS) das Stück vorkommt
+var FINDS: Array = [
+	{"id": "kiesel", "name": "Kieselstein", "r": 0, "val": 3, "layers": [0, 1, 2, 3]},
+	{"id": "scherbe", "name": "Glasscherbe", "r": 0, "val": 4, "layers": [0, 1]},
+	{"id": "muenze", "name": "Alte Münze", "r": 1, "val": 25, "layers": [0, 1]},
+	{"id": "hufeisen", "name": "Hufeisen", "r": 1, "val": 30, "layers": [0, 1]},
+	{"id": "achat", "name": "Achat", "r": 1, "val": 45, "layers": [1, 2]},
+	{"id": "haizahn", "name": "Haizahn", "r": 2, "val": 120, "layers": [1, 2]},
+	{"id": "ammonit", "name": "Ammonit", "r": 2, "val": 160, "layers": [2]},
+	{"id": "kristall", "name": "Bergkristall", "r": 2, "val": 200, "layers": [2, 3]},
+	{"id": "gold", "name": "Goldnugget", "r": 3, "val": 600, "layers": [1, 2, 3]},
+	{"id": "dino", "name": "Dinosaurier-Knochen", "r": 3, "val": 900, "layers": [2]},
+]
+var SONAR_KINDS: Array = [
+	{"id": "metall", "name": "Metallsignal", "pool": ["muenze", "hufeisen", "gold"]},
+	{"id": "fossil", "name": "Fossilien-Echo", "pool": ["haizahn", "ammonit", "dino"]},
+	{"id": "hohl", "name": "Kristall-Hohlraum", "pool": ["achat", "kristall", "gold"]},
+]
+var bag: Array = []            # eingesammelte, noch nicht aufgeklopfte Klumpen (IDs)
+var book: Dictionary = {}      # Sammelbuch: ID -> Anzahl
+var found_total := 0
+var best_rarity := -1
+var sonar: Dictionary = {}     # aktuelles Echolot-Ziel: {"d": Tiefe, "k": Art}
 
 
 func _ready() -> void:
@@ -187,6 +220,69 @@ func sell(knapp: bool = false, under_t: float = 0.0) -> void:
 	load_val = 0.0
 	save_game()
 
+func find_by_id(id: String) -> Dictionary:
+	for F in FINDS:
+		if F["id"] == id:
+			return F
+	return FINDS[0]
+
+## Zieht ein zufälliges Fundstück passend zur Schicht. Seltenes ist selten.
+func roll_find() -> Dictionary:
+	var li := layer_idx(depth)
+	var roll := randf() * 100.0
+	var r := 0
+	var cum := 0.0
+	for i in range(RARITY.size() - 1, -1, -1):
+		cum += float(RARITY[i]["w"])
+		if roll < cum:
+			r = i
+			break
+	while r >= 0:
+		var opts: Array = FINDS.filter(func(F): return F["r"] == r and li in F["layers"])
+		if not opts.is_empty():
+			return opts[randi() % opts.size()]
+		r -= 1
+	return FINDS[0]
+
+## Echolot: setzt ein Ziel knapp unter der Sohle, erreichbar in einem Gang.
+func new_sonar() -> void:
+	if not sonar.is_empty():
+		return
+	var k: Dictionary = SONAR_KINDS[randi() % SONAR_KINDS.size()]
+	var reach := cap_kg() / KG_PER_M
+	var d := depth + minf(reach * 0.85, 1.2 + randf() * maxf(1.0, reach * 0.7))
+	sonar = {"d": d, "k": k["id"]}
+	toast.emit("Echolot: %s %s unter der Sohle!" % [k["name"], fmt_len(d - depth)], "big")
+
+func sonar_kind() -> Dictionary:
+	for k in SONAR_KINDS:
+		if k["id"] == sonar.get("k", ""):
+			return k
+	return SONAR_KINDS[0]
+
+## Wählt das Fundstück für ein erreichtes Echolot-Ziel. Bevorzugt, was im Sammelbuch fehlt.
+func pick_sonar_find() -> Dictionary:
+	var k := sonar_kind()
+	var li := layer_idx(depth)
+	var pool: Array = FINDS.filter(func(F): return F["id"] in k["pool"])
+	var fits: Array = pool.filter(func(F): return li in F["layers"])
+	if not fits.is_empty():
+		pool = fits
+	var unknown: Array = pool.filter(func(F): return not book.has(F["id"]))
+	var from: Array = unknown if (not unknown.is_empty() and randf() < 0.7) else pool
+	return from[randi() % from.size()]
+
+## Klopft einen Klumpen auf: trägt ihn ins Sammelbuch ein und zahlt aus.
+func reveal(id: String) -> Dictionary:
+	var F := find_by_id(id)
+	var first := not book.has(id)
+	book[id] = int(book.get(id, 0)) + 1
+	var val := float(F["val"]) * (2.0 if first else 1.0)
+	eur += val
+	total_eur += val
+	save_game()
+	return {"F": F, "val": val, "first": first}
+
 ## Wie gut reicht das Licht für den Rückweg? Bewusst unscharf, ohne Sekunden.
 func return_zone(player_y: float, at_base: bool) -> String:
 	if at_base:
@@ -205,6 +301,7 @@ func save_game() -> void:
 	var data := {
 		"depth": depth, "eur": eur, "total_eur": total_eur, "load_kg": load_kg, "load_val": load_val,
 		"lv": lv, "trips": trips, "sold_kg": sold_kg, "streak": streak, "best_trip": best_trip,
+		"bag": bag, "book": book, "found_total": found_total, "best_rarity": best_rarity, "sonar": sonar,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
@@ -228,6 +325,14 @@ func load_game() -> bool:
 	sold_kg = float(data.get("sold_kg", 0.0))
 	streak = int(data.get("streak", 0))
 	best_trip = float(data.get("best_trip", 0.0))
+	bag = Array(data.get("bag", []))
+	found_total = int(data.get("found_total", 0))
+	best_rarity = int(data.get("best_rarity", -1))
+	sonar = data.get("sonar", {})
+	book = {}
+	var saved_book: Dictionary = data.get("book", {})
+	for id in saved_book.keys():
+		book[id] = int(saved_book[id])
 	var saved_lv: Dictionary = data.get("lv", {})
 	for k in lv.keys():
 		lv[k] = int(saved_lv.get(k, 0))
@@ -237,6 +342,7 @@ func load_game() -> bool:
 func reset_game() -> void:
 	depth = 0.0; eur = 0.0; total_eur = 0.0; load_kg = 0.0; load_val = 0.0
 	trips = 0; sold_kg = 0.0; streak = 0; best_trip = 0.0; mod = {}
+	bag = []; book = {}; found_total = 0; best_rarity = -1; sonar = {}
 	for k in lv.keys():
 		lv[k] = 0
 	batt = lamp_max()

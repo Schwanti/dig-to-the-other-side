@@ -17,6 +17,13 @@ var load_bar: ProgressBar
 var lamp_l: Label
 var lamp_bar: ProgressBar
 var journey_l: Label
+var sonar_l: Label
+var bag_l: Label
+var reveal_panel: PanelContainer
+var reveal_sb: StyleBoxFlat
+var reveal_k: Label
+var reveal_n: Label
+var reveal_v: Label
 var boost_l: Label
 var takt_l: Label
 var takt_bar: ProgressBar
@@ -43,6 +50,8 @@ func _ready() -> void:
 	lamp_l = _label(v, 13, C_MUTED)
 	lamp_bar = _bar(v, C_GOOD)
 	journey_l = _label(v, 12, C_SKY)
+	sonar_l = _label(v, 13, C_SKY)
+	bag_l = _label(v, 13, C_MUTED)
 	boost_l = _label(v, 13, C_CAUTION)
 	boost_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	boost_l.custom_minimum_size = Vector2(250, 0)
@@ -65,6 +74,23 @@ func _ready() -> void:
 	takt_bar.add_theme_stylebox_override("fill", tfill)
 	takt_bar.add_theme_stylebox_override("background", tbg)
 	add_child(takt_bar)
+
+	# Aufklopf-Anzeige oben in der Mitte
+	reveal_panel = PanelContainer.new()
+	reveal_sb = _plate()
+	reveal_sb.set_border_width_all(2)
+	reveal_sb.content_margin_left = 26
+	reveal_sb.content_margin_right = 26
+	reveal_panel.add_theme_stylebox_override("panel", reveal_sb)
+	var rv := VBoxContainer.new()
+	reveal_panel.add_child(rv)
+	reveal_k = _label(rv, 13, C_MUTED)
+	reveal_n = _label(rv, 28, C_TEXT)
+	reveal_v = _label(rv, 16, C_TEXT)
+	for l in [reveal_k, reveal_n, reveal_v]:
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	reveal_panel.visible = false
+	add_child(reveal_panel)
 
 	prompt_l = Label.new()
 	prompt_l.add_theme_font_size_override("font_size", 17)
@@ -166,6 +192,22 @@ func refresh(zone: String, prompt: String, urgent: bool, extra: Dictionary = {})
 
 	boost_l.text = extra.get("boosts", "")
 	boost_l.visible = boost_l.text != ""
+	sonar_l.text = extra.get("sonar", "")
+	sonar_l.visible = sonar_l.text != ""
+	var bag_n: int = extra.get("bag", 0)
+	bag_l.text = "Rucksack: %d Klumpen" % bag_n
+	bag_l.visible = bag_n > 0
+	# Fadenkreuz wird zum goldenen Ring, wenn ein Klumpen anvisiert ist
+	if extra.get("aim_find", false):
+		cross.color = Color("#ffcf3f")
+		cross.size = Vector2(12, 12)
+	else:
+		cross.color = Color.WHITE
+		cross.size = Vector2(6, 6)
+	cross.position = vp / 2.0 - cross.size / 2.0
+	if reveal_panel.visible:
+		reveal_panel.reset_size()
+		reveal_panel.position = Vector2((vp.x - reveal_panel.size.x) / 2.0, vp.y * 0.14)
 	var c: int = extra.get("combo", 0)
 	var cm: float = extra.get("combo_mult", 1.0)
 	var show_takt := c > 2 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
@@ -178,6 +220,35 @@ func refresh(zone: String, prompt: String, urgent: bool, extra: Dictionary = {})
 		takt_l.position = Vector2((vp.x - takt_l.size.x) / 2.0, vp.y / 2.0 + 18.0)
 		takt_bar.value = minf(float(c), 30.0) / 30.0
 		takt_bar.position = Vector2((vp.x - 100.0) / 2.0, vp.y / 2.0 + 18.0 + takt_l.size.y)
+
+
+## Aufklopfen, Teil 1: Seltenheit zeigen, Inhalt noch geheim.
+func show_reveal_start(rarity: Dictionary, left: int) -> void:
+	reveal_panel.visible = true
+	reveal_sb.border_color = rarity["color"]
+	reveal_k.text = "KLUMPEN AUFKLOPFEN  ·  %d ÜBRIG" % left
+	reveal_n.text = "? ? ?"
+	reveal_n.add_theme_color_override("font_color", rarity["color"])
+	reveal_v.text = rarity["name"]
+	var tw := create_tween()
+	reveal_n.pivot_offset = reveal_n.size / 2.0
+	for i in 3:
+		tw.tween_property(reveal_n, "scale", Vector2(1.12, 1.12), 0.08)
+		tw.tween_property(reveal_n, "scale", Vector2.ONE, 0.12)
+
+
+## Aufklopfen, Teil 2: der Inhalt.
+func show_reveal_result(res: Dictionary, rarity: Dictionary) -> void:
+	var F: Dictionary = res["F"]
+	reveal_n.text = F["name"]
+	reveal_v.text = "%s  ·  +%s%s" % [rarity["name"], Game.fmt_eur(res["val"]), "  ·  NEU im Sammelbuch, Wert ×2" if res["first"] else ""]
+	reveal_n.pivot_offset = reveal_n.size / 2.0
+	reveal_n.scale = Vector2(1.3, 1.3)
+	create_tween().tween_property(reveal_n, "scale", Vector2.ONE, 0.3)
+
+
+func hide_reveal() -> void:
+	reveal_panel.visible = false
 
 
 func show_takt_level(_mult: float) -> void:
